@@ -9,18 +9,21 @@ steps:
   displayName: Install Docker
 
 - script: |
-    sudo apt-get update
-    sudo apt-get install -y docker-compose-plugin
-  displayName: Install Docker Compose Plugin
-
-- script: |
+    docker --version
     docker compose version
-  displayName: Verify Docker Compose Installation
+  displayName: Verify Docker Installation
 
 - script: |
     docker compose up -d
   displayName: Run n8n using Docker Compose
 
 - script: |
-    docker compose ps
-  displayName: Verify Containers are Running
+    docker ps
+    PORT=$(docker inspect $(docker ps -q) --format='{{(index (index .NetworkSettings.Ports "5678/tcp") 0).HostPort}}')
+    echo "##vso[task.setvariable variable=N8N_DYNAMIC_PORT]$PORT"
+    echo "n8n is running on port $PORT"
+  displayName: Get Dynamic Port from Docker
+
+- script: |
+    echo "Access n8n on localhost:${N8N_DYNAMIC_PORT}"
+  displayName: Use Dynamic Port
