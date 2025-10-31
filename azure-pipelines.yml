@@ -9,5 +9,18 @@ steps:
   displayName: Install Docker
 
 - script: |
+    sudo apt-get update
+    sudo apt-get install -y docker-compose-plugin
+  displayName: Install Docker Compose Plugin
+
+- script: |
+    docker compose version
+  displayName: Verify Docker Compose Installation
+
+- script: |
     docker compose up -d
   displayName: Run n8n using Docker Compose
+
+- script: |
+    docker compose ps
+  displayName: Verify Containers are Running
