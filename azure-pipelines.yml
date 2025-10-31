@@ -5,25 +5,37 @@ pool:
   vmImage: 'ubuntu-latest'
 
 steps:
-- task: DockerInstaller@0
-  displayName: Install Docker
+# Uninstall old Docker version if present
+- script: |
+    sudo apt-get remove -y docker docker-engine docker.io containerd runc || true
+  displayName: Remove Old Docker Versions
 
+# Install latest Docker Engine and Compose plugin
+- script: |
+    sudo apt-get update
+    sudo apt-get install -y ca-certificates curl gnupg lsb-release
+    sudo mkdir -p /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+      https://download.docker.com/linux/ubuntu \
+      $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+    sudo apt-get update
+    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  displayName: Install Latest Docker & Compose
+
+# Verify installation
 - script: |
     docker --version
     docker compose version
   displayName: Verify Docker Installation
 
+# Run n8n
 - script: |
     docker compose up -d
   displayName: Run n8n using Docker Compose
 
+# Verify running containers
 - script: |
     docker ps
-    PORT=$(docker inspect $(docker ps -q) --format='{{(index (index .NetworkSettings.Ports "5678/tcp") 0).HostPort}}')
-    echo "##vso[task.setvariable variable=N8N_DYNAMIC_PORT]$PORT"
-    echo "n8n is running on port $PORT"
-  displayName: Get Dynamic Port from Docker
-
-- script: |
-    echo "Access n8n on localhost:${N8N_DYNAMIC_PORT}"
-  displayName: Use Dynamic Port
+  displayName: Verify Containers are Running
