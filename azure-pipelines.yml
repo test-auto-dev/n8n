@@ -5,7 +5,7 @@ trigger:
 
 variables:
   resourceGroup: "my-rg"
-  containerAppName: "my-n8n"
+  containerAppName: "my-test-services"
   environmentName: "my-env"
   location: "eastus"
   storageAccountName: "n8nstorageacct"
@@ -18,83 +18,65 @@ steps:
   - task: AzureCLI@2
     displayName: "🚀 Deploy persistent n8n to Azure Container Apps"
     inputs:
-      azureSubscription: "My-Azure-Service-Connection" # 🔹 Replace this with your actual service connection name
+      azureSubscription: "My-Azure-Service-Connection"
       scriptType: bash
       scriptLocation: inlineScript
       inlineScript: |
-        set -e
+        set -ex
 
-        echo "🔹 Setting variables..."
-        resourceGroup="${resourceGroup}"
-        containerAppName="${containerAppName}"
-        environmentName="${environmentName}"
-        location="${location}"
-        storageAccountName="${storageAccountName}"
-        fileShareName="${fileShareName}"
+        echo "🔹 Creating resource group..."
+        az group create --name $resourceGroup --location $location
 
-        echo "🔹 Creating resource group (if not exists)..."
-        az group create --name "$resourceGroup" --location "$location"
-
-        echo "🔹 Creating Container Apps environment (if not exists)..."
+        echo "🔹 Creating Container Apps environment..."
         az containerapp env create \
-          --name "$environmentName" \
-          --resource-group "$resourceGroup" \
-          --location "$location" || true
+          --name $environmentName \
+          --resource-group $resourceGroup \
+          --location $location || true
 
-        echo "🔹 Creating storage account (if not exists)..."
+        echo "🔹 Creating storage account..."
         az storage account create \
-          --name "$storageAccountName" \
-          --resource-group "$resourceGroup" \
-          --location "$location" \
+          --name $storageAccountName \
+          --resource-group $resourceGroup \
+          --location $location \
           --sku Standard_LRS || true
 
-        echo "🔹 Getting storage account key..."
-        storageKey=$(az storage account keys list --account-name "$storageAccountName" --resource-group "$resourceGroup" --query "[0].value" -o tsv)
-
-        echo "🔹 Creating file share (persistent data)..."
+        echo "🔹 Creating file share..."
         az storage share create \
-          --name "$fileShareName" \
-          --account-name "$storageAccountName" \
-          --account-key "$storageKey" || true
+          --name $fileShareName \
+          --account-name $storageAccountName || true
 
         echo "🔹 Deploying n8n container..."
         az containerapp create \
-          --name "$containerAppName" \
-          --resource-group "$resourceGroup" \
-          --environment "$environmentName" \
+          --name $containerAppName \
+          --resource-group $resourceGroup \
+          --environment $environmentName \
           --image n8nio/n8n:latest \
           --target-port 5678 \
           --ingress external \
           --min-replicas 1 \
           --max-replicas 1 \
-          --cpu 0.5 \
-          --memory 1.0Gi \
           --env-vars \
+            N8N_BASIC_AUTH_ACTIVE=true \
+            N8N_BASIC_AUTH_USER=admin \
+            N8N_BASIC_AUTH_PASSWORD=SuperStrongPassword@123 \
             N8N_USER_MANAGEMENT_DISABLED=false \
-            N8N_BASIC_AUTH_ACTIVE=false \
             N8N_ENCRYPTION_KEY=mySuperSecretKey123 \
             N8N_PROTOCOL=https \
             N8N_PORT=5678 \
+            N8N_PATH=/ \
+            WEBHOOK_URL="https://my-test-services.${location}.azurecontainerapps.io/" \
             TZ=Asia/Kolkata \
-            WEBHOOK_URL=https://my-test-services.gentlewater-3c4722ee.eastus.azurecontainerapps.io/ \
-          --volume-mounts "/home/node/.n8n=n8n-data" \
-          --storage-account-name "$storageAccountName" \
-          --storage-account-key "$storageKey" \
-          --file-share-name "$fileShareName" \
-          -o none || true
+          --query properties.configuration.ingress.fqdn -o tsv || true
 
         echo "🔹 Fetching public URL..."
-        fqdn=$(az containerapp show --name "$containerAppName" --resource-group "$resourceGroup" --query "properties.configuration.ingress.fqdn" -o tsv)
-        
-        if [ -z "$fqdn" ]; then
-          echo "❌ ERROR: Could not fetch FQDN. Container app may have failed to deploy."
-          exit 1
-        fi
-
+        fqdn=$(az containerapp show --name $containerAppName --resource-group $resourceGroup --query properties.configuration.ingress.fqdn -o tsv)
         echo "✅ Your n8n instance is live at: https://$fqdn"
 
-        echo "🔹 Updating WEBHOOK_URL to match actual FQDN..."
+        echo "🔹 Updating n8n container with correct WEBHOOK_URL..."
         az containerapp update \
-          --name "$containerAppName" \
-          --resource-group "$resourceGroup" \
-          --set-env-vars WEBHOOK_URL=https://$fqdn/
+          --name $containerAppName \
+          --resource-group $resourceGroup \
+          --set-env-vars WEBHOOK_URL=https://$fqdn \
+          --query properties.configuration.ingress.fqdn -o tsv || true
+
+        echo "✅ Deployment complete. Access n8n at: https://$fqdn"
