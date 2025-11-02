@@ -1,41 +1,81 @@
 trigger:
-- main
+  branches:
+    include:
+      - main
+
+variables:
+  resourceGroup: "my-rg"
+  containerAppName: "my-n8n"
+  environmentName: "my-env"
+  location: "eastus"
+  storageAccountName: "n8nstorageacct"
+  fileShareName: "n8nfilestorage"
 
 pool:
-  vmImage: 'ubuntu-latest'
+  vmImage: ubuntu-latest
 
 steps:
-# Uninstall old Docker version if present
-- script: |
-    sudo apt-get remove -y docker docker-engine docker.io containerd runc || true
-  displayName: Remove Old Docker Versions
+  - task: AzureCLI@2
+    inputs:
+      azureSubscription: "My-Azure-Service-Connection" # 🔹 Replace with your actual Azure service connection name
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        echo "🔹 Creating resource group (if not exists)..."
+        az group create --name $resourceGroup --location $location
 
-# Install latest Docker Engine and Compose plugin
-- script: |
-    sudo apt-get update
-    sudo apt-get install -y ca-certificates curl gnupg lsb-release
-    sudo mkdir -p /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-    echo \
-      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-      https://download.docker.com/linux/ubuntu \
-      $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-    sudo apt-get update
-    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-  displayName: Install Latest Docker & Compose
+        echo "🔹 Creating Container Apps environment (if not exists)..."
+        az containerapp env create \
+          --name $environmentName \
+          --resource-group $resourceGroup \
+          --location $location || true
 
-# Verify installation
-- script: |
-    docker --version
-    docker compose version
-  displayName: Verify Docker Installation
+        echo "🔹 Creating storage account (if not exists)..."
+        az storage account create \
+          --name $storageAccountName \
+          --resource-group $resourceGroup \
+          --location $location \
+          --sku Standard_LRS || true
 
-# Run n8n
-- script: |
-    docker compose up -d
-  displayName: Run n8n using Docker Compose
+        echo "🔹 Getting storage account key..."
+        storageKey=$(az storage account keys list --account-name $storageAccountName --resource-group $resourceGroup --query "[0].value" -o tsv)
 
-# Verify running containers
-- script: |
-    docker ps
-  displayName: Verify Containers are Running
+        echo "🔹 Creating file share (for persistent n8n data)..."
+        az storage share create \
+          --name $fileShareName \
+          --account-name $storageAccountName \
+          --account-key $storageKey || true
+
+        echo "🔹 Deploying n8n container app..."
+        az containerapp create \
+          --name $containerAppName \
+          --resource-group $resourceGroup \
+          --environment $environmentName \
+          --image n8nio/n8n:latest \
+          --target-port 5678 \
+          --ingress external \
+          --min-replicas 1 \
+          --max-replicas 1 \
+          --env-vars \
+            N8N_USER_MANAGEMENT_DISABLED=false \
+            N8N_BASIC_AUTH_ACTIVE=false \
+            N8N_ENCRYPTION_KEY=mySuperSecretKey123 \
+            N8N_PROTOCOL=https \
+            N8N_PORT=5678 \
+            TZ=Asia/Kolkata \
+            WEBHOOK_URL=https://my-test-services.gentlewater-3c4722ee.eastus.azurecontainerapps.io/ \
+          --volume-mounts "/home/node/.n8n=n8n-data" \
+          --storage-account-name $storageAccountName \
+          --storage-account-key $storageKey \
+          --file-share-name $fileShareName \
+          -o none || true
+
+        echo "🔹 Fetching public URL..."
+        fqdn=$(az containerapp show --name $containerAppName --resource-group $resourceGroup --query properties.configuration.ingress.fqdn -o tsv)
+        echo "✅ Your n8n instance is live at: https://$fqdn"
+
+        echo "🔹 Updating WEBHOOK_URL to match actual FQDN..."
+        az containerapp update \
+          --name $containerAppName \
+          --resource-group $resourceGroup \
+          --set-env-vars WEBHOOK_URL=https://$fqdn/
