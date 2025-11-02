@@ -1,41 +1,70 @@
 trigger:
-- main
+  branches:
+    include:
+      - main
+
+variables:
+  resourceGroup: "my-rg"
+  containerAppName: "my-n8n"
+  environmentName: "my-env"
+  location: "eastus"
+  storageAccountName: "n8nstorageacct"
+  fileShareName: "n8nfilestorage"
 
 pool:
-  vmImage: 'ubuntu-latest'
+  vmImage: ubuntu-latest
 
 steps:
-# Uninstall old Docker version if present
-- script: |
-    sudo apt-get remove -y docker docker-engine docker.io containerd runc || true
-  displayName: Remove Old Docker Versions
+  - task: AzureCLI@2
+    inputs:
+      azureSubscription: "My-Azure-Service-Connection" # Replace with your service connection name
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        echo "Creating resource group..."
+        az group create --name $resourceGroup --location $location
 
-# Install latest Docker Engine and Compose plugin
-- script: |
-    sudo apt-get update
-    sudo apt-get install -y ca-certificates curl gnupg lsb-release
-    sudo mkdir -p /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-    echo \
-      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-      https://download.docker.com/linux/ubuntu \
-      $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-    sudo apt-get update
-    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-  displayName: Install Latest Docker & Compose
+        echo "Creating Container Apps environment..."
+        az containerapp env create \
+          --name $environmentName \
+          --resource-group $resourceGroup \
+          --location $location || true
 
-# Verify installation
-- script: |
-    docker --version
-    docker compose version
-  displayName: Verify Docker Installation
+        echo "Creating storage account..."
+        az storage account create \
+          --name $storageAccountName \
+          --resource-group $resourceGroup \
+          --location $location \
+          --sku Standard_LRS || true
 
-# Run n8n
-- script: |
-    docker compose up -d
-  displayName: Run n8n using Docker Compose
+        echo "Creating file share..."
+        az storage share create \
+          --name $fileShareName \
+          --account-name $storageAccountName || true
 
-# Verify running containers
-- script: |
-    docker ps
-  displayName: Verify Containers are Running
+        echo "Deploying n8n container app..."
+        az containerapp create \
+          --name $containerAppName \
+          --resource-group $resourceGroup \
+          --environment $environmentName \
+          --image n8nio/n8n:latest \
+          --target-port 5678 \
+          --ingress external \
+          --min-replicas 1 \
+          --max-replicas 1 \
+          --env-vars \
+            N8N_USER_MANAGEMENT_DISABLED=false \
+            N8N_BASIC_AUTH_ACTIVE=false \
+            N8N_ENCRYPTION_KEY=mySuperSecretKey123 \
+            N8N_PROTOCOL=https \
+            N8N_PORT=5678 \
+            TZ=Asia/Kolkata \
+          --volume-mounts "/home/node/.n8n=n8n-data" \
+          --secrets none \
+          --registry-identity system \
+          --query properties.configuration.ingress.fqdn \
+          -o tsv || true
+
+        echo "Deployment complete. Fetching URL..."
+        fqdn=$(az containerapp show --name $containerAppName --resource-group $resourceGroup --query properties.configuration.ingress.fqdn -o tsv)
+        echo "✅ Access your n8n instance at: https://$fqdn"
