@@ -5,11 +5,16 @@ trigger:
 
 variables:
   resourceGroup: "my-rg"
-  containerAppName: "my-n8n"
+  containerAppName: "my-test-services"   # 👈 your custom prefix here
   environmentName: "my-env"
   location: "eastus"
   storageAccountName: "n8nstorageacct"
   fileShareName: "n8nfilestorage"
+
+  # 👇 These can be stored as pipeline variables or in a variable group (recommended)
+  n8nUser: "janmejay"
+  n8nPassword: "SecurePass@123"
+  n8nEncryptionKey: "UltraSecretKey2025!"
 
 pool:
   vmImage: ubuntu-latest
@@ -17,54 +22,55 @@ pool:
 steps:
   - task: AzureCLI@2
     inputs:
-      azureSubscription: "My-Azure-Service-Connection" # Replace with your service connection name
+      azureSubscription: "My-Azure-Service-Connection"
       scriptType: bash
       scriptLocation: inlineScript
       inlineScript: |
+        set -e
+
         echo "Creating resource group..."
-        az group create --name $resourceGroup --location $location
+        az group create --name $(resourceGroup) --location $(location)
 
         echo "Creating Container Apps environment..."
         az containerapp env create \
-          --name $environmentName \
-          --resource-group $resourceGroup \
-          --location $location || true
+          --name $(environmentName) \
+          --resource-group $(resourceGroup) \
+          --location $(location) || true
 
         echo "Creating storage account..."
         az storage account create \
-          --name $storageAccountName \
-          --resource-group $resourceGroup \
-          --location $location \
+          --name $(storageAccountName) \
+          --resource-group $(resourceGroup) \
+          --location $(location) \
           --sku Standard_LRS || true
 
         echo "Creating file share..."
         az storage share create \
-          --name $fileShareName \
-          --account-name $storageAccountName || true
+          --name $(fileShareName) \
+          --account-name $(storageAccountName) || true
 
-        echo "Deploying n8n container app..."
+        echo "Deploying n8n container app with custom auth and prefix..."
         az containerapp create \
-          --name $containerAppName \
-          --resource-group $resourceGroup \
-          --environment $environmentName \
+          --name $(containerAppName) \
+          --resource-group $(resourceGroup) \
+          --environment $(environmentName) \
           --image n8nio/n8n:latest \
           --target-port 5678 \
           --ingress external \
           --min-replicas 1 \
           --max-replicas 1 \
           --env-vars \
-            N8N_USER_MANAGEMENT_DISABLED=false \
-            N8N_BASIC_AUTH_ACTIVE=false \
-            N8N_ENCRYPTION_KEY=mySuperSecretKey123 \
+            N8N_BASIC_AUTH_ACTIVE=true \
+            N8N_BASIC_AUTH_USER=$(n8nUser) \
+            N8N_BASIC_AUTH_PASSWORD=$(n8nPassword) \
+            N8N_ENCRYPTION_KEY=$(n8nEncryptionKey) \
             N8N_PROTOCOL=https \
             N8N_PORT=5678 \
+            N8N_USER_MANAGEMENT_DISABLED=false \
             TZ=Asia/Kolkata \
-          --volume-mounts "/home/node/.n8n=n8n-data" \
-          --secrets none \
-          --registry-identity system \
-          --query properties.configuration.ingress.fqdn \
-          -o tsv || true
+          -o none
 
-        echo "Deployment complete. Fetching URL..."
-        fqdn=$(az containerapp show --name $containerAppName --resource-group $resourceGroup --query properties.configuration.ingress.fqdn -o tsv)
-        echo "✅ Access your n8n instance at: https://$fqdn"
+        echo "Fetching the public URL..."
+        fqdn=$(az containerapp show --name $(containerAppName) --resource-group $(resourceGroup) --query properties.configuration.ingress.fqdn -o tsv)
+        echo "✅ Your n8n instance is live at: https://$fqdn"
+        echo "👤 Login with username: $(n8nUser)"
